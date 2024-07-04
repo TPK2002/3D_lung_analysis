@@ -324,7 +324,6 @@ unsigned long* chords_in_any_direction(volume vol, line l) {
     return chords;
 }
 
-// TODO: We might need scaling, but might not ? Test!
 void fibonacci_sphere(point* fibonacci_points, unsigned int number_of_angles, point center, double radius) {
     double golden_ratio = (1.0 + sqrt(5.0)) / 2.0;
 
