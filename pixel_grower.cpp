@@ -216,7 +216,6 @@ int save_to_file(unsigned long* chords, unsigned int num_elements) {
 }
 
 unsigned short get_pixel_distance(point current_point, volume vol, unsigned short number_of_angles){
-
     // 1. Calculate fibonacci Sphere Points
     point fibonacci_points[number_of_angles];
     unsigned short fibonacci_radius = min(vol.width, vol.height, vol.depth) / 2;
@@ -299,12 +298,13 @@ int main(){
             for (unsigned short k = 0; k < vol.height; k++) {
                 point current_point = {j,k,i};
                 unsigned long pixel_index = i * vol.width * vol.height + j * vol.height + k;
-                result[pixel_index] = get_pixel_distance(current_point, vol, number_of_angles);
-            }
-            if (j % 20 == 0) {
-                save_to_file(result, num_elements);
+                if (vol.data[pixel_index] != CHORDS_UNTIL)
+                    result[pixel_index] = get_pixel_distance(current_point, vol, number_of_angles);
             }
         }
+//        if (j % 20 == 0) {
+//            save_to_file(result, num_elements);
+//        }
     }
 
     // save to file final result
