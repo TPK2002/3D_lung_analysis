@@ -6,10 +6,13 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <string>
+#include <limits.h>
 
-// either 0 or 1, depending on what we to end a chord with
-// We will also only work on pixels, that are not equal to CHORDS_UNTIL
-bool CHORDS_UNTIL = 1;
+
+#define MODE_MIN "min"
+#define MODE_MAX "max"
+#define MODE_AVERAGE "avg"
 
 struct point {
     unsigned short x;
@@ -18,9 +21,9 @@ struct point {
 };
 
 struct volume {
-    unsigned short width;
-    unsigned short height;
-    unsigned short depth;
+    unsigned short nx;
+    unsigned short ny;
+    unsigned short nz;
     unsigned char* data;
 };
 
@@ -62,7 +65,7 @@ vector normalize(vector v) {
 }
 
 // adjusted Bresenham's line algorithm to walk along a line until we hit a non-zero/non-one voxel
-unsigned short get_line_length(volume vol, point line_start, point line_end) {
+unsigned short get_line_length(volume vol, point line_start, point line_end, bool chords_through) {
     int x0 = line_start.x;
     int y0 = line_start.y;
     int z0 = line_start.z;
@@ -79,11 +82,11 @@ unsigned short get_line_length(volume vol, point line_start, point line_end) {
     unsigned int chord_length = 0;
 
     while (1) {  /* loop */
-        unsigned int index = z0 * vol.width * vol.height + x0 * vol.height + y0;
+        unsigned int index = z0 * vol.nx * vol.ny + x0 * vol.nx + y0;
         unsigned short value = vol.data[index];
 
         // Move on the line until we hit a non-zero voxel
-        if (value == CHORDS_UNTIL) {
+        if (value != chords_through) {
             return chord_length;
         }
         chord_length++;
@@ -99,7 +102,7 @@ unsigned short get_line_length(volume vol, point line_start, point line_end) {
 
 void get_line_bounds(parametric_line line, volume vol, double *t_min, double *t_max) {
     double x_min = 0, y_min = 0, z_min = 0;
-    double x_max = vol.width - 1, y_max = vol.height - 1, z_max = vol.depth - 1;
+    double x_max = vol.nx - 1, y_max = vol.ny - 1, z_max = vol.nz - 1;
 
     double t_x_min, t_x_max;
     double t_y_min, t_y_max;
@@ -202,28 +205,29 @@ int min(int a,int b,int c) {
     }
 }
 
-int save_to_file(unsigned long* chords, unsigned int num_elements) {
+int save_to_file(std::string save_path, unsigned short* chords, unsigned int num_elements) {
     // save to file
-    FILE *fp = fopen("chords.raw", "wb");
+    FILE *fp = fopen(save_path.c_str(), "wb");
     if (fp == NULL) {
         perror("Error opening file");
         return 1;
     }
-    fwrite(chords, sizeof(unsigned long), num_elements, fp);
+    fwrite(chords, sizeof(unsigned short), num_elements, fp);
     fclose(fp);
 
     return 0;
 }
 
-unsigned short get_pixel_distance(point current_point, volume vol, unsigned short number_of_angles){
+unsigned short get_pixel_distance(point current_point, volume vol, unsigned short number_of_angles, std::string mode, bool chords_through){
     // 1. Calculate fibonacci Sphere Points
+    // CAN WE OPTIMIZE, BY NOT RECALCULATING THE SPHERE WITH EVERY PIXEL ?
     point fibonacci_points[number_of_angles];
-    unsigned short fibonacci_radius = min(vol.width, vol.height, vol.depth) / 2;
+    unsigned short fibonacci_radius = min(vol.nx, vol.ny, vol.nz) / 2;
     fibonacci_sphere(fibonacci_points, number_of_angles, current_point, fibonacci_radius);
 
-    unsigned long cumulated_distance = 0;
-
-    # pragma omp parallel for
+    unsigned short min_distance = USHRT_MAX;
+    unsigned short max_distance = 0;
+    unsigned short cumulated_distance = 0;
     for (int i = 0;i < number_of_angles; i++) {
 
         // Get max line bound
@@ -235,27 +239,64 @@ unsigned short get_pixel_distance(point current_point, volume vol, unsigned shor
         point end_point = {static_cast<unsigned short>(pl.x0 + pl.direction.a * t_max), static_cast<unsigned short>(pl.y0 + pl.direction.b * t_max), static_cast<unsigned short>(pl.z0 + pl.direction.c * t_max)};
 
         // Get line length until we hit a non-zero voxel or the end of the line
-        cumulated_distance += get_line_length(vol, current_point, end_point);
+        unsigned short line_length = get_line_length(vol, current_point, end_point, chords_through);
+        cumulated_distance += line_length;
+        if (line_length < min_distance) min_distance = line_length;
+        if (line_length > max_distance) max_distance = line_length;
     }
 
-    // return mean value
-    return cumulated_distance / number_of_angles;
+    // Depending on the mode combine the values:
+    if (mode == MODE_MIN) return min_distance;
+    if (mode == MODE_MAX) return max_distance;
+    if (mode == MODE_AVERAGE) return cumulated_distance / number_of_angles;
+
+    fprintf(stderr, "Unknown mode\n");
+    exit(EXIT_FAILURE);
 }
 
 
-int main(){
-    // Dimensions of the 3D array
-    int width = 500;  // replace with actual width
-    int height = 500; // replace with actual height
-    int depth = 500;  // replace with actual depth
-    unsigned short number_of_angles = 1000;
+int main(int argc, char *argv[]){
+
+    // Get from CLI. nx, ny, nz, number_of_angles, mode
+    std::string file_path;
+    unsigned short nx, ny, nz, number_of_angles;
+    std::string mode = "avg"; // default is average
+    bool chords_through = 0;
+
+    if (argc < 6) {
+        printf("Pixel Grower has to be called with arguments: <file_path> <nx> <ny> <nz> <num_angles> (<mode: avg|min|max> <inverse=yes>)");
+        return 1;
+    }
+
+    // Argv[0] is the programm name
+    file_path = argv[1];
+    nx = static_cast<unsigned short>(strtoul(argv[2],NULL,10));
+    ny = static_cast<unsigned short>(strtoul(argv[3],NULL,10));
+    nz = static_cast<unsigned short>(strtoul(argv[4],NULL,10));
+    number_of_angles = static_cast<unsigned short>(strtoul(argv[5],NULL,10));
+
+    if (argc == 7) {
+        mode = argv[6];
+    }
+
+    if (argc == 8) {
+        if (strcmp("--inverse", argv[7]) == 0) {
+            chords_through = 1;
+        }
+    }
+
+    printf("Pixel Grower called for: %s, %hux%hux%hu.\n", file_path.c_str(), nx, ny, nz);
+    printf("Doing %hu angles per pixel with mode: %s \n",number_of_angles, mode.c_str());
+    if (chords_through == 1) {
+        printf("INVERSE MODE ACTIVE \n");
+    }
 
     // Calculate the total number of elements
-    unsigned int num_elements = width * height * depth;
+    unsigned int num_elements = nx * ny * nz;
     unsigned int file_size = num_elements;
 
     // Open the binary file
-    int fd = open("./lung424_small_mask.raw", O_RDONLY);
+    int fd = open(file_path.c_str(), O_RDONLY);
     if (fd == -1) {
         perror("Error opening file");
         return 1;
@@ -287,28 +328,32 @@ int main(){
     }
 
     printf("Beginning processing\n");
-    volume vol = {(unsigned short) width,(unsigned short) height,(unsigned short) depth, data };
+    volume vol = {nx,ny,nz,data};
 
-    unsigned long* result = (unsigned long*) malloc((unsigned int) vol.width * vol.height * vol.depth * sizeof(unsigned long));
+    unsigned short* result = (unsigned short*) malloc((unsigned int) vol.nx * vol.ny * vol.nz * sizeof(unsigned short));
 
     // For Every Pixel do:
-    for (unsigned short i = 0; i < vol.depth; i++) {
+    # pragma omp parallel for
+    for (unsigned short i = 0; i < vol.nz; i++) {
         printf("Working on slice no.: %d\n", i);
-        for (unsigned short j = 0; j < vol.width; j++) {
-            for (unsigned short k = 0; k < vol.height; k++) {
+        for (unsigned short j = 0; j < vol.ny; j++) {
+            for (unsigned short k = 0; k < vol.nx; k++) {
                 point current_point = {j,k,i};
-                unsigned long pixel_index = i * vol.width * vol.height + j * vol.height + k;
-                if (vol.data[pixel_index] != CHORDS_UNTIL)
-                    result[pixel_index] = get_pixel_distance(current_point, vol, number_of_angles);
+                unsigned long pixel_index = i * vol.nx * vol.ny + j * vol.nx + k;
+                if (vol.data[pixel_index] == chords_through)
+                    result[pixel_index] = get_pixel_distance(current_point, vol, number_of_angles, mode, chords_through);
             }
         }
-//        if (j % 20 == 0) {
-//            save_to_file(result, num_elements);
-//        }
     }
 
+    std::string save_path = std::string(file_path) + "_" + std::to_string(nx) + "x" + std::to_string(ny) + "x" + std::to_string(nz) + "_" + std::to_string(number_of_angles) + "_" + mode;
+    if (chords_through == 1) {
+        save_path += "_inverse";
+    }
+    save_path += ".raw";
+
     // save to file final result
-    save_to_file(result, num_elements);
+    save_to_file(save_path, result, num_elements);
 
     // Free the memory
     free(result);
