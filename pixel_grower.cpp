@@ -6,6 +6,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <cstring>
 #include <string>
 #include <limits.h>
 
@@ -82,8 +83,8 @@ unsigned short get_line_length(volume vol, point line_start, point line_end, boo
     unsigned int chord_length = 0;
 
     while (1) {  /* loop */
-        unsigned int index = z0 * vol.nx * vol.ny + x0 * vol.nx + y0;
-        unsigned short value = vol.data[index];
+        unsigned int pixel_index = z0 * vol.nx * vol.ny + y0 * vol.nx + x0;
+        unsigned short value = vol.data[pixel_index];
 
         // Move on the line until we hit a non-zero voxel
         if (value != chords_through) {
@@ -205,14 +206,14 @@ int min(int a,int b,int c) {
     }
 }
 
-int save_to_file(std::string save_path, unsigned short* chords, unsigned int num_elements) {
+int save_to_file(std::string save_path, unsigned short* result, unsigned int num_elements) {
     // save to file
     FILE *fp = fopen(save_path.c_str(), "wb");
     if (fp == NULL) {
         perror("Error opening file");
         return 1;
     }
-    fwrite(chords, sizeof(unsigned short), num_elements, fp);
+    fwrite(result, sizeof(unsigned short), num_elements, fp);
     fclose(fp);
 
     return 0;
@@ -310,11 +311,11 @@ int main(int argc, char *argv[]){
 	}
 
 	unsigned int N_bytes = file_properties.st_size;
-	printf("File size: %u\n", (unsigned int) N_bytes);
-	printf("Expected size: %u\n", (unsigned int) file_size);
 
 	if ((unsigned int) N_bytes != (unsigned int) file_size)
     {
+        printf("File size: %u\n", (unsigned int) N_bytes);
+        printf("Expected size: %u\n", (unsigned int) file_size);
         printf("File size does not match the expected size\n");
         return 1;
     }
@@ -334,12 +335,13 @@ int main(int argc, char *argv[]){
 
     // For Every Pixel do:
     # pragma omp parallel for
-    for (unsigned short i = 0; i < vol.nz; i++) {
-        printf("Working on slice no.: %d\n", i);
-        for (unsigned short j = 0; j < vol.ny; j++) {
-            for (unsigned short k = 0; k < vol.nx; k++) {
-                point current_point = {j,k,i};
-                unsigned long pixel_index = i * vol.nx * vol.ny + j * vol.nx + k;
+    for (unsigned short z = 0; z < vol.nz; z++) {
+        // SILENTED FOR AUTOMATION
+        // printf("Working on slice no.: %d\n", i);
+        for (unsigned short y = 0; y < vol.ny; y++) {
+            for (unsigned short x = 0; x < vol.nx; x++) {
+                point current_point = {x,y,z};
+                unsigned long pixel_index = z * vol.ny * vol.nx + y * vol.nx + x;
                 if (vol.data[pixel_index] == chords_through)
                     result[pixel_index] = get_pixel_distance(current_point, vol, number_of_angles, mode, chords_through);
             }
