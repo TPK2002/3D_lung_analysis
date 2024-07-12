@@ -25,15 +25,41 @@ unsigned long* chords_in_any_direction(volume vol, line l);
 void merge_chords(unsigned long* chords, unsigned long* to_merge, unsigned int num_elements);
 int save_to_file(unsigned long* chords, unsigned int num_elements);
 
-int main() {
-    // Dimensions of the 3D array
-    int width = 500;  // replace with actual width
-    int height = 500; // replace with actual height
-    int depth = 500;  // replace with actual depth
-    unsigned short number_of_angles = 1000;
+int main(int argc, char *argv[]) {
+    // Get from CLI. nx, ny, nz, number_of_angles, mode
+    std::string file_path;
+    unsigned short nx, ny, nz, number_of_angles;
+    std::string mode = "avg"; // default is average
+    bool chords_through = 0; // should the processing happen on background: 0 or tissue: 1
+
+    if (argc < 6) {
+        printf("Chords 3D has to be called with arguments: <file_path> <nx> <ny> <nz> <num_angles> < --inverse>)");
+        return 1;
+    }
+
+    // Parse CLI parameters
+    // note: argv[0] is the programm name, thus begin with 1
+    file_path = argv[1];
+    nx = static_cast<unsigned short>(strtoul(argv[2],NULL,10));
+    ny = static_cast<unsigned short>(strtoul(argv[3],NULL,10));
+    nz = static_cast<unsigned short>(strtoul(argv[4],NULL,10));
+    number_of_angles = static_cast<unsigned short>(strtoul(argv[5],NULL,10));
+
+    // if --inverse is specified as 7th parameter, invert processing => run processing on tissue
+    if (argc >= 7) {
+        if (strcmp("--inverse", argv[6]) == 0) {
+            chords_through = 1;
+        }
+    }
+
+    printf("Chords 3D called for: %s, %hux%hux%hu.\n", file_path.c_str(), nx, ny, nz);
+    printf("Doing %hu angles per pixel \n",number_of_angles);
+    if (chords_through == 1) {
+        printf("INVERSE MODE ACTIVE \n");
+    }
 
     // Calculate the total number of elements
-    unsigned int num_elements = width * height * depth;
+    unsigned int num_elements = nx * ny * nz;
     unsigned int file_size = num_elements;
 
     // Open the binary file
@@ -51,11 +77,10 @@ int main() {
 	}
 
 	unsigned int N_bytes = file_properties.st_size;
-	printf("File size: %u\n", (unsigned int) N_bytes);
-	printf("Expected size: %u\n", (unsigned int) file_size);
-
 	if ((unsigned int) N_bytes != (unsigned int) file_size)
     {
+	    printf("File size: %u\n", (unsigned int) N_bytes);
+	    printf("Expected size: %u\n", (unsigned int) file_size);
         printf("File size does not match the expected size\n");
         return 1;
     }
@@ -69,14 +94,14 @@ int main() {
     }
 
     printf("Beginning processing\n");
-    volume vol = {(unsigned short) width,(unsigned short) height,(unsigned short) depth, data };
-    point center = {(unsigned short) (width / 2),(unsigned short) (height / 2),(unsigned short) (depth / 2)};
+    volume vol = {(unsigned short) nx,(unsigned short) ny,(unsigned short) nz, data };
+    point center = {(unsigned short) (nx / 2),(unsigned short) (ny / 2),(unsigned short) (nz / 2)};
 
-    unsigned long* all_chords = (unsigned long*) malloc((unsigned int) vol.width * vol.height * vol.depth * sizeof(unsigned long));
+    unsigned long* all_chords = (unsigned long*) malloc((unsigned int) vol.nx * vol.ny * vol.nz * sizeof(unsigned long));
 
     // 1. Calculate fibonacci Sphere Points
     point fibonacci_points[number_of_angles];
-    unsigned short fibonacci_radius = min(width, height, depth) / 2;
+    unsigned short fibonacci_radius = min(nx, ny, nz) / 2;
     fibonacci_sphere(fibonacci_points, number_of_angles, center, fibonacci_radius);
 
     // For Every Sphere Point
@@ -129,7 +154,7 @@ int main() {
  AND ONLY WORKS WITH EQUAL X,Y,Z DIMENSIONS OF VOLUME
 */
 unsigned long* chords_in_any_direction(volume vol, line l) {
-    unsigned long* chords = (unsigned long*) malloc((unsigned int) vol.width * vol.height * vol.depth * sizeof(unsigned short));
+    unsigned long* chords = (unsigned long*) malloc((unsigned int) vol.nx * vol.ny * vol.nz * sizeof(unsigned short));
 
     // Check if memory allocation was successful
     if (chords == NULL) {
@@ -143,7 +168,7 @@ unsigned long* chords_in_any_direction(volume vol, line l) {
 
     // printf("Converted to parametric line\n");
 
-    unsigned int grid_size = vol.width;
+    unsigned int grid_size = vol.nx;
     parametric_line* parallel_lines = get_parallel_lines(pl, grid_size);
 
     unsigned long num_paralell_lines = (grid_size * 2) * (grid_size * 2);
@@ -167,6 +192,7 @@ unsigned long* chords_in_any_direction(volume vol, line l) {
                       (unsigned short) (parallel_lines[k].z0 + t_max * parallel_lines[k].direction.c)};
 
         // DEBUG
+        // TODO: Actual volume sizes here!
         if (stop.x > 499 || stop.y > 499 || stop.z > 499 || start.x > 499 || start.y > 499 || start.z > 499) {
             //printf("Tried getting chords along line: %d, %d, %d, %d, %d, %d\n", start.x, start.y, start.z, stop.x, stop.y, stop.z);
             continue;
@@ -200,8 +226,8 @@ void chords_along_line(volume vol, unsigned long* chords, point line_start, poin
     unsigned int chord_length = 0;
 
     while (1) {  /* loop */
-        unsigned int index = z0 * vol.width * vol.height + x0 * vol.height + y0;
-        //printf("index: %d, %d, %d, %d, %d, %d, %d\n", index, z0, x0, y0, vol.height, vol.width, vol.depth);
+        unsigned int index = z0 * vol.nx * vol.ny + x0 * vol.ny + y0;
+        //printf("index: %d, %d, %d, %d, %d, %d, %d\n", index, z0, x0, y0, vol.ny, vol.nx, vol.nz);
         unsigned short value = vol.data[index];
         //printf("value: %d\n", value);
 
