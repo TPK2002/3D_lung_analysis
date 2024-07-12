@@ -1,7 +1,6 @@
 #include <cfloat>
 #include <cstdio>
 #include <omp.h>
-#include <cmath>
 #include <sys/fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -10,211 +9,145 @@
 #include <string>
 #include <limits.h>
 
+#include "common.h"
 
 #define MODE_MIN "min"
 #define MODE_MAX "max"
 #define MODE_AVERAGE "avg"
 
-struct point {
-    unsigned short x;
-    unsigned short y;
-    unsigned short z;
-};
+unsigned short get_pixel_distance(point current_point, volume vol, unsigned short number_of_angles, std::string mode, bool chords_through);
+unsigned short get_line_length(volume vol, point line_start, point line_end, bool chords_through);
+int save_to_file(std::string save_path, unsigned short* result, unsigned int num_elements);
 
-struct volume {
-    unsigned short nx;
-    unsigned short ny;
-    unsigned short nz;
-    unsigned char* data;
-};
+int main(int argc, char *argv[]){
 
-struct line {
-    point start;
-    point end;
-};
+    // Get from CLI. nx, ny, nz, number_of_angles, mode
+    std::string file_path;
+    unsigned short nx, ny, nz, number_of_angles;
+    std::string mode = "avg"; // default is average
+    bool chords_through = 0; // should the processing happen on background: 0 or tissue: 1
 
-struct vector {
-    double a;
-    double b;
-    double c;
-};
-
-struct parametric_line {
-    double x0;
-    double y0;
-    double z0;
-    vector direction;
-};
-
-int max(int a, int b, int c) {
-    if (a > b && a > c) {
-        return a;
-    } else if (b > a && b > c) {
-        return b;
-    } else {
-        return c;
-    }
-}
-
-vector normalize(vector v) {
-    double length = sqrt(v.a * v.a + v.b * v.b + v.c * v.c);
-    vector normalized;
-    normalized.a = v.a / length;
-    normalized.b = v.b / length;
-    normalized.c = v.c / length;
-    return normalized;
-}
-
-// adjusted Bresenham's line algorithm to walk along a line until we hit a non-zero/non-one voxel
-unsigned short get_line_length(volume vol, point line_start, point line_end, bool chords_through) {
-    int x0 = line_start.x;
-    int y0 = line_start.y;
-    int z0 = line_start.z;
-    int x1 = line_end.x;
-    int y1 = line_end.y;
-    int z1 = line_end.z;
-
-    int dx = abs(x1-x0), sx = x0<x1 ? 1 : -1;
-    int dy = abs(y1-y0), sy = y0<y1 ? 1 : -1;
-    int dz = abs(z1-z0), sz = z0<z1 ? 1 : -1;
-    int dm = max(dx,dy,dz), i = dm; /* maximum difference */
-    x1 = y1 = z1 = dm/2; /* error offset */
-
-    unsigned int chord_length = 0;
-
-    while (1) {  /* loop */
-        unsigned int pixel_index = z0 * vol.nx * vol.ny + y0 * vol.nx + x0;
-        unsigned short value = vol.data[pixel_index];
-
-        // Move on the line until we hit a non-zero voxel
-        if (value != chords_through) {
-            return chord_length;
-        }
-        chord_length++;
-
-        if (i-- == 0) break;
-        x1 -= dx; if (x1 < 0) { x1 += dm; x0 += sx; }
-        y1 -= dy; if (y1 < 0) { y1 += dm; y0 += sy; }
-        z1 -= dz; if (z1 < 0) { z1 += dm; z0 += sz; }
+    if (argc < 6) {
+        printf("Pixel Grower has to be called with arguments: <file_path> <nx> <ny> <nz> <num_angles> (<mode: avg|min|max> < --inverse>)");
+        return 1;
     }
 
-    return chord_length;
-}
+    // Parse CLI parameters
+    // note: argv[0] is the programm name, thus begin with 1
+    file_path = argv[1];
+    nx = static_cast<unsigned short>(strtoul(argv[2],NULL,10));
+    ny = static_cast<unsigned short>(strtoul(argv[3],NULL,10));
+    nz = static_cast<unsigned short>(strtoul(argv[4],NULL,10));
+    number_of_angles = static_cast<unsigned short>(strtoul(argv[5],NULL,10));
 
-void get_line_bounds(parametric_line line, volume vol, double *t_min, double *t_max) {
-    double x_min = 0, y_min = 0, z_min = 0;
-    double x_max = vol.nx - 1, y_max = vol.ny - 1, z_max = vol.nz - 1;
-
-    double t_x_min, t_x_max;
-    double t_y_min, t_y_max;
-    double t_z_min, t_z_max;
-
-    // Avoid division by zero by handling a, b, or c being zero
-    if (line.direction.a != 0) {
-        t_x_min = (x_min - line.x0) / line.direction.a;
-        t_x_max = (x_max - line.x0) / line.direction.a;
-        if (t_x_min > t_x_max) {
-            double temp = t_x_min;
-            t_x_min = t_x_max;
-            t_x_max = temp;
-        }
-    } else {
-        t_x_min = -DBL_MAX;
-        t_x_max = DBL_MAX;
+    if (argc >= 7) {
+        mode = argv[6];
     }
 
-    if (line.direction.b != 0) {
-        t_y_min = (y_min - line.y0) / line.direction.b;
-        t_y_max = (y_max - line.y0) / line.direction.b;
-        if (t_y_min > t_y_max) {
-            double temp = t_y_min;
-            t_y_min = t_y_max;
-            t_y_max = temp;
-        }
-    } else {
-        t_y_min = -DBL_MAX;
-        t_y_max = DBL_MAX;
-    }
-
-    if (line.direction.c != 0) {
-        t_z_min = (z_min - line.z0) / line.direction.c;
-        t_z_max = (z_max - line.z0) / line.direction.c;
-        if (t_z_min > t_z_max) {
-            double temp = t_z_min;
-            t_z_min = t_z_max;
-            t_z_max = temp;
-        }
-    } else {
-        t_z_min = -DBL_MAX;
-        t_z_max = DBL_MAX;
-    }
-
-    // Find the intersection of all valid t ranges
-    *t_min = fmax(fmax(t_x_min, t_y_min), t_z_min);
-    *t_max = fmin(fmin(t_x_max, t_y_max), t_z_max);
-
-    if (*t_min > *t_max) {
-        // ------------ TODO: Investigate this, wasted computing power, no ? ------------
-        //printf("No valid t range: t_min = %f, t_max = %f\n", *t_min, *t_max);
-        *t_min = -1; // Or some indication of no valid range
-        *t_max = -1;
-    }
-}
-
-parametric_line to_parametric_line(line l) {
-    parametric_line pl;
-    pl.x0 = l.start.x;
-    pl.y0 = l.start.y;
-    pl.z0 = l.start.z;
-    pl.direction.a = l.end.x - l.start.x;
-    pl.direction.b = l.end.y - l.start.y;
-    pl.direction.c = l.end.z - l.start.z;
-    pl.direction = normalize(pl.direction);
-    return pl;
-}
-
-void fibonacci_sphere(point* fibonacci_points, unsigned int number_of_angles, point center, double radius) {
-    double golden_ratio = (1.0 + sqrt(5.0)) / 2.0;
-
-    for (int i = 0; i < number_of_angles; i++) {
-        double theta = 2.0 * M_PI * i / golden_ratio;
-        double phi = acos(1 - 2 * i / (double) number_of_angles); // eventuell i + 0,5
-
-        double x = cos(theta) * sin(phi);
-        double y = sin(theta) * sin(phi);
-        double z = cos(phi);
-
-        fibonacci_points[i].x = center.x + radius * x;
-        fibonacci_points[i].y = center.y + radius * y;
-        fibonacci_points[i].z = center.z + radius * z;
-    }
-}
-
-int min(int a,int b,int c) {
-    if (a < b) {
-        if (a < c) {
-            return a;
-        } else {
-            return c;
-        }
-    } else {
-        if (b < c) {
-            return b;
-        } else {
-            return c;
+    // if --inverse is specified as 7th parameter, invert processing => run processing on tissue
+    if (argc >= 8) {
+        if (strcmp("--inverse", argv[7]) == 0) {
+            chords_through = 1;
         }
     }
-}
 
-int save_to_file(std::string save_path, unsigned short* result, unsigned int num_elements) {
-    // save to file
-    FILE *fp = fopen(save_path.c_str(), "wb");
-    if (fp == NULL) {
+    printf("Pixel Grower called for: %s, %hux%hux%hu.\n", file_path.c_str(), nx, ny, nz);
+    printf("Doing %hu angles per pixel with mode: %s \n",number_of_angles, mode.c_str());
+    if (chords_through == 1) {
+        printf("INVERSE MODE ACTIVE \n");
+    }
+
+    // Calculate the total number of elements
+    unsigned int num_elements = nx * ny * nz;
+    unsigned int file_size = num_elements;
+
+    // Open the binary file
+    int fd = open(file_path.c_str(), O_RDONLY);
+    if (fd == -1) {
         perror("Error opening file");
         return 1;
     }
-    fwrite(result, sizeof(unsigned short), num_elements, fp);
-    fclose(fp);
+
+    // Get file properties, to compare to theoretical size
+   	struct stat file_properties;
+	if(fstat(fd, &file_properties) < 0)
+	{
+		perror("Error getting file properties");
+		return 1;
+	}
+
+    // Compare theoretical and practical file size and quit if they don't align
+	unsigned int N_bytes = file_properties.st_size;
+	if ((unsigned int) N_bytes != (unsigned int) file_size)
+    {
+        printf("File size: %u\n", (unsigned int) N_bytes);
+        printf("Expected size: %u\n", (unsigned int) file_size);
+        printf("File size does not match the expected size\n");
+        return 1;
+    }
+
+    // Map the file into the processes virtual memory address space
+    unsigned char *data = (unsigned char *)mmap(NULL, (unsigned int) file_size, PROT_READ, MAP_SHARED, fd, 0);
+    if (data == MAP_FAILED) {
+        perror("Error mmapping the file");
+        close(fd);
+        return 1;
+    }
+
+
+    // All is prepared, we can begin with the actual processing
+    printf("Beginning processing\n");
+
+    // Create volume structure, for easier access to parameters
+    volume vol = {nx,ny,nz,data};
+
+    // Reserve Memory for results
+    unsigned short* result = (unsigned short*) malloc((unsigned int) vol.nx * vol.ny * vol.nz * sizeof(unsigned short));
+
+    // This little preprocessor directive does all the magic needed for parallel processing
+    # pragma omp parallel for
+
+    // Do for every slice
+    for (unsigned short z = 0; z < vol.nz; z++) {
+
+        // Do for every row
+        for (unsigned short y = 0; y < vol.ny; y++) {
+
+            // Do for every pixel
+            for (unsigned short x = 0; x < vol.nx; x++) {
+
+                // Calculate pixel index of currently looked at point
+                point current_point = {x,y,z};
+                unsigned long pixel_index = z * vol.ny * vol.nx + y * vol.nx + x;
+
+                // We only do calculations for pixels, that interest us, either background or tissue
+                if (vol.data[pixel_index] == chords_through)
+                    result[pixel_index] = get_pixel_distance(current_point, vol, number_of_angles, mode, chords_through);
+            }
+        }
+    }
+
+    std::string save_path = std::string(file_path) + "_" + std::to_string(nx) + "x" + std::to_string(ny) + "x" + std::to_string(nz) + "_" + std::to_string(number_of_angles) + "_" + mode;
+    if (chords_through == 1) {
+        save_path += "_inverse";
+    }
+    save_path += ".raw";
+
+    // save to file final result
+    save_to_file(save_path, result, num_elements);
+
+    // Free the memory
+    free(result);
+
+    // Unmap the file
+    if (munmap(data, file_size) == -1) {
+        perror("Error unmapping the file");
+        close(fd);
+        return 1;
+    }
+
+    // Close the file
+    close(fd);
 
     return 0;
 }
@@ -255,120 +188,51 @@ unsigned short get_pixel_distance(point current_point, volume vol, unsigned shor
     exit(EXIT_FAILURE);
 }
 
+// adjusted Bresenham's line algorithm to walk along a line until we hit a non-zero/non-one voxel
+unsigned short get_line_length(volume vol, point line_start, point line_end, bool chords_through) {
+    int x0 = line_start.x;
+    int y0 = line_start.y;
+    int z0 = line_start.z;
+    int x1 = line_end.x;
+    int y1 = line_end.y;
+    int z1 = line_end.z;
 
-int main(int argc, char *argv[]){
+    int dx = abs(x1-x0), sx = x0<x1 ? 1 : -1;
+    int dy = abs(y1-y0), sy = y0<y1 ? 1 : -1;
+    int dz = abs(z1-z0), sz = z0<z1 ? 1 : -1;
+    int dm = max(dx,dy,dz), i = dm; /* maximum difference */
+    x1 = y1 = z1 = dm/2; /* error offset */
 
-    // Get from CLI. nx, ny, nz, number_of_angles, mode
-    std::string file_path;
-    unsigned short nx, ny, nz, number_of_angles;
-    std::string mode = "avg"; // default is average
-    bool chords_through = 0;
+    unsigned int chord_length = 0;
 
-    if (argc < 6) {
-        printf("Pixel Grower has to be called with arguments: <file_path> <nx> <ny> <nz> <num_angles> (<mode: avg|min|max> <inverse=yes>)");
-        return 1;
-    }
+    while (1) {  /* loop */
+        unsigned int pixel_index = z0 * vol.nx * vol.ny + y0 * vol.nx + x0;
+        unsigned short value = vol.data[pixel_index];
 
-    // Argv[0] is the programm name
-    file_path = argv[1];
-    nx = static_cast<unsigned short>(strtoul(argv[2],NULL,10));
-    ny = static_cast<unsigned short>(strtoul(argv[3],NULL,10));
-    nz = static_cast<unsigned short>(strtoul(argv[4],NULL,10));
-    number_of_angles = static_cast<unsigned short>(strtoul(argv[5],NULL,10));
-
-    if (argc == 7) {
-        mode = argv[6];
-    }
-
-    if (argc == 8) {
-        if (strcmp("--inverse", argv[7]) == 0) {
-            chords_through = 1;
+        // Move on the line until we hit a non-zero voxel
+        if (value != chords_through) {
+            return chord_length;
         }
+        chord_length++;
+
+        if (i-- == 0) break;
+        x1 -= dx; if (x1 < 0) { x1 += dm; x0 += sx; }
+        y1 -= dy; if (y1 < 0) { y1 += dm; y0 += sy; }
+        z1 -= dz; if (z1 < 0) { z1 += dm; z0 += sz; }
     }
 
-    printf("Pixel Grower called for: %s, %hux%hux%hu.\n", file_path.c_str(), nx, ny, nz);
-    printf("Doing %hu angles per pixel with mode: %s \n",number_of_angles, mode.c_str());
-    if (chords_through == 1) {
-        printf("INVERSE MODE ACTIVE \n");
-    }
+    return chord_length;
+}
 
-    // Calculate the total number of elements
-    unsigned int num_elements = nx * ny * nz;
-    unsigned int file_size = num_elements;
-
-    // Open the binary file
-    int fd = open(file_path.c_str(), O_RDONLY);
-    if (fd == -1) {
+int save_to_file(std::string save_path, unsigned short* result, unsigned int num_elements) {
+    // save to file
+    FILE *fp = fopen(save_path.c_str(), "wb");
+    if (fp == NULL) {
         perror("Error opening file");
         return 1;
     }
-
-   	struct stat file_properties;
-	if(fstat(fd, &file_properties) < 0)
-	{
-		perror("Error getting file properties");
-		return 1;
-	}
-
-	unsigned int N_bytes = file_properties.st_size;
-
-	if ((unsigned int) N_bytes != (unsigned int) file_size)
-    {
-        printf("File size: %u\n", (unsigned int) N_bytes);
-        printf("Expected size: %u\n", (unsigned int) file_size);
-        printf("File size does not match the expected size\n");
-        return 1;
-    }
-
-    // Memory map the file
-    unsigned char *data = (unsigned char *)mmap(NULL, (unsigned int) file_size, PROT_READ, MAP_SHARED, fd, 0);
-    if (data == MAP_FAILED) {
-        perror("Error mmapping the file");
-        close(fd);
-        return 1;
-    }
-
-    printf("Beginning processing\n");
-    volume vol = {nx,ny,nz,data};
-
-    unsigned short* result = (unsigned short*) malloc((unsigned int) vol.nx * vol.ny * vol.nz * sizeof(unsigned short));
-
-    // For Every Pixel do:
-    # pragma omp parallel for
-    for (unsigned short z = 0; z < vol.nz; z++) {
-        // SILENTED FOR AUTOMATION
-        // printf("Working on slice no.: %d\n", i);
-        for (unsigned short y = 0; y < vol.ny; y++) {
-            for (unsigned short x = 0; x < vol.nx; x++) {
-                point current_point = {x,y,z};
-                unsigned long pixel_index = z * vol.ny * vol.nx + y * vol.nx + x;
-                if (vol.data[pixel_index] == chords_through)
-                    result[pixel_index] = get_pixel_distance(current_point, vol, number_of_angles, mode, chords_through);
-            }
-        }
-    }
-
-    std::string save_path = std::string(file_path) + "_" + std::to_string(nx) + "x" + std::to_string(ny) + "x" + std::to_string(nz) + "_" + std::to_string(number_of_angles) + "_" + mode;
-    if (chords_through == 1) {
-        save_path += "_inverse";
-    }
-    save_path += ".raw";
-
-    // save to file final result
-    save_to_file(save_path, result, num_elements);
-
-    // Free the memory
-    free(result);
-
-    // Unmap the file
-    if (munmap(data, file_size) == -1) {
-        perror("Error unmapping the file");
-        close(fd);
-        return 1;
-    }
-
-    // Close the file
-    close(fd);
+    fwrite(result, sizeof(unsigned short), num_elements, fp);
+    fclose(fp);
 
     return 0;
 }
