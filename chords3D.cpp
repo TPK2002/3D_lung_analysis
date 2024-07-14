@@ -13,8 +13,6 @@
 #include <omp.h>
 #include <chrono>
 #include <iostream>
-
-
 #include "common.h"
 
 struct chord_pixel {
@@ -129,7 +127,7 @@ int main(int argc, char *argv[]) {
     unsigned short* compressed = compress_results(all_chords, num_elements, number_of_angles, mode);
 
     // save to file final result
-    std::string save_path = std::string(file_path) + "_" + std::to_string(nx) + "x" + std::to_string(ny) + "x" + std::to_string(nz) + "_" + std::to_string(number_of_angles) + "_" + mode;
+    std::string save_path = std::string(file_path) + "_" + std::to_string(number_of_angles) + "_" + mode;
     if (chords_through == 1) {
         save_path += "_inverse";
     }
@@ -178,8 +176,9 @@ unsigned long* chords_in_any_direction(volume vol, line l) {
     unsigned int grid_size = vol.nx;
     parametric_line* parallel_lines = get_parallel_lines(pl, grid_size);
 
+    // TODO: A lot too much lines are being generated here
     unsigned long num_paralell_lines = (grid_size * 2) * (grid_size * 2);
-    for (int k = 0; k <= num_paralell_lines; k++) {
+    for (int k = 0; k < num_paralell_lines; k++) {
 
         double t_min, t_max;
         get_line_bounds(parallel_lines[k], vol, &t_min, &t_max);
@@ -230,12 +229,10 @@ void chords_along_line(volume vol, unsigned long* chords, point line_start, poin
 
     while (1) {  /* loop */
         unsigned int index = z0 * vol.nx * vol.ny + x0 * vol.ny + y0;
-        //printf("index: %d, %d, %d, %d, %d, %d, %d\n", index, z0, x0, y0, vol.ny, vol.nx, vol.nz);
         unsigned short value = vol.data[index];
-        //printf("value: %d\n", value);
 
+        // TODO: Chords through modus
         if (value == 0) {
-                //printf("Value 0 \n");
                 chord_pixel* new_chord_pixel = (chord_pixel*) malloc(sizeof(chord_pixel));
                 new_chord_pixel->previous_pixel = last_chord_pixel;
                 new_chord_pixel->pixel_index = index;
