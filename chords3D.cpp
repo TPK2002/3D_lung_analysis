@@ -11,6 +11,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <omp.h>
+#include <chrono>
+#include <iostream>
+
 
 #include "common.h"
 
@@ -176,7 +179,6 @@ unsigned long* chords_in_any_direction(volume vol, line l) {
     parametric_line* parallel_lines = get_parallel_lines(pl, grid_size);
 
     unsigned long num_paralell_lines = (grid_size * 2) * (grid_size * 2);
-
     for (int k = 0; k <= num_paralell_lines; k++) {
 
         double t_min, t_max;
@@ -279,25 +281,48 @@ void set_chord(unsigned long* chords, chord_pixel last_pixel, unsigned int chord
     }
 }
 
+template<typename T>
+void update_maximum(std::atomic<T>& maximum_value, T const& value) noexcept {
+    T prev_value = maximum_value.load();
+    while (prev_value < value && !maximum_value.compare_exchange_weak(prev_value, value)) {
+        // If the compare_exchange_weak fails, prev_value is updated with the current value of maximum_value
+    }
+}
+
+template<typename T>
+void update_minimum(std::atomic<T>& minimum_value, T const& value) noexcept {
+    T prev_value = minimum_value.load();
+    while (prev_value > value && !minimum_value.compare_exchange_weak(prev_value, value)) {
+        // If the compare_exchange_weak fails, prev_value is updated with the current value of minimum_value
+    }
+}
+
 void merge_chords(unsigned long* chords, unsigned long* to_merge, unsigned int num_elements, std::string mode) {
-    for (int i = 0; i < num_elements; i++) {
-        # pragma omp critical
-        {
-            if (mode == "avg") {
+    if (mode == "min") {
+        for (int i = 0; i < num_elements; i++) {
+            std::atomic<unsigned long> atomic_chord(chords[i]);
+            update_minimum(atomic_chord, to_merge[i]);
+            chords[i] = atomic_chord.load();
+        }
+    } else if (mode == "min") {
+        for (int i = 0; i < num_elements; i++) {
+            std::atomic<unsigned long> atomic_chord(chords[i]);
+            update_maximum(atomic_chord, to_merge[i]);
+            chords[i] = atomic_chord.load();
+        }
+    } else {
+        for (int i = 0; i < num_elements; i++) {
+            #pragma omp atomic
             chords[i] = chords[i] + to_merge[i];
-            } else if (mode == "min") {
-                 if (chords[i] > to_merge[i]) chords[i] = to_merge[i];
-            } else if (mode == "max") {
-                if (chords[i] < to_merge[i]) chords[i] = to_merge[i];
-            }
         }
     }
 }
 
+
 // This function "compresses" the results => we work with longs internally, to be able to accomodate high accumulations in average mode
 // In average mode the mean has to be taken here, in all other modes, we just cast and copy
 unsigned short* compress_results(unsigned long* chords, unsigned short num_elements, unsigned short num_of_angles, std::string mode) {
-    unsigned short* compressed = (unsigned short*) malloc((int) num_elements * sizeof(unsigned short));
+    unsigned short* compressed = (unsigned short*) malloc((unsigned int) num_elements * sizeof(unsigned short));
     for (int i = 0; i < num_elements; i++) {
         if (mode == "avg") {
             compressed[i] = static_cast<unsigned short>(chords[i] / num_of_angles);
