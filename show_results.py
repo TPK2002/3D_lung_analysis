@@ -5,7 +5,7 @@ import sys
 # Function to read uint8 binary raw file
 def read_uint8_binary(file_path, shape):
     with open(file_path, 'rb') as f:
-        data = np.fromfile(f, dtype=np.uint64)
+        data = np.fromfile(f, dtype=np.uint16)
         return data.reshape(shape)
 
 if __name__ == "__main__":

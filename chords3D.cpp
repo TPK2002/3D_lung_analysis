@@ -22,8 +22,8 @@ struct chord_pixel {
 void set_chord(unsigned long* chords, chord_pixel last_pixel, unsigned int chord_length);
 void chords_along_line(volume vol, unsigned long* chords, point line_start, point line_end);
 unsigned long* chords_in_any_direction(volume vol, line l);
-void merge_chords(unsigned long* chords, unsigned long* to_merge, unsigned int num_elements);
-int save_to_file(unsigned long* chords, unsigned int num_elements);
+void merge_chords(unsigned long* chords, unsigned long* to_merge, unsigned int num_elements, std::string mode);
+unsigned short* compress_results(unsigned long* chords, unsigned short num_elements, unsigned short num_of_angles, std::string mode);
 
 int main(int argc, char *argv[]) {
     // Get from CLI. nx, ny, nz, number_of_angles, mode
@@ -33,7 +33,7 @@ int main(int argc, char *argv[]) {
     bool chords_through = 0; // should the processing happen on background: 0 or tissue: 1
 
     if (argc < 6) {
-        printf("Chords 3D has to be called with arguments: <file_path> <nx> <ny> <nz> <num_angles> < --inverse>)");
+        printf("Chords 3D has to be called with arguments: <file_path> <nx> <ny> <nz> <num_angles> <mode> < --inverse>)");
         return 1;
     }
 
@@ -45,15 +45,19 @@ int main(int argc, char *argv[]) {
     nz = static_cast<unsigned short>(strtoul(argv[4],NULL,10));
     number_of_angles = static_cast<unsigned short>(strtoul(argv[5],NULL,10));
 
-    // if --inverse is specified as 7th parameter, invert processing => run processing on tissue
     if (argc >= 7) {
-        if (strcmp("--inverse", argv[6]) == 0) {
+        mode = argv[6];
+    }
+
+    // if --inverse is specified as 7th parameter, invert processing => run processing on tissue
+    if (argc >= 8) {
+        if (strcmp("--inverse", argv[7]) == 0) {
             chords_through = 1;
         }
     }
 
     printf("Chords 3D called for: %s, %hux%hux%hu.\n", file_path.c_str(), nx, ny, nz);
-    printf("Doing %hu angles per pixel \n",number_of_angles);
+    printf("Doing %hu angles per pixel with mode: %s \n",number_of_angles, mode.c_str());
     if (chords_through == 1) {
         printf("INVERSE MODE ACTIVE \n");
     }
@@ -63,7 +67,7 @@ int main(int argc, char *argv[]) {
     unsigned int file_size = num_elements;
 
     // Open the binary file
-    int fd = open("../lung424_small_mask.raw", O_RDONLY);
+    int fd = open(file_path.c_str(), O_RDONLY);
     if (fd == -1) {
         perror("Error opening file");
         return 1;
@@ -99,39 +103,39 @@ int main(int argc, char *argv[]) {
 
     unsigned long* all_chords = (unsigned long*) malloc((unsigned int) vol.nx * vol.ny * vol.nz * sizeof(unsigned long));
 
-    // 1. Calculate fibonacci Sphere Points
+    // 1. Calculate fibonacci Hemisphere Points
     point fibonacci_points[number_of_angles];
     unsigned short fibonacci_radius = min(nx, ny, nz) / 2;
-    fibonacci_sphere(fibonacci_points, number_of_angles, center, fibonacci_radius);
+    fibonacci_hemisphere(fibonacci_points, number_of_angles, center, fibonacci_radius);
 
-    // For Every Sphere Point
+    // For Every Hemisphere Point
     # pragma omp parallel for
     for (int i = 0; i < number_of_angles; i++) {
         printf("Working on angle no.: %d\n", i);
 
-
         // 2. Create a line, by specifying generated point and center of sphere/volume
         line l = {center, fibonacci_points[i]};
 
-        // printf("Processing fibonacci point: %d, %d, %d, %d, %d, %d\n", l.start.x, l.start.y, l.start.z, l.end.x, l.end.y, l.end.z);
-
         unsigned long* result = chords_in_any_direction(vol, l);
 
-
-        merge_chords(all_chords, result, num_elements);
+        merge_chords(all_chords, result, num_elements, mode);
         free(result);
 
-        if (i % 100 == 0) {
-            printf("Saving to file\n");
-            save_to_file(all_chords, num_elements);
-        }
     }
 
+    unsigned short* compressed = compress_results(all_chords, num_elements, number_of_angles, mode);
+
     // save to file final result
-    save_to_file(all_chords, num_elements);
+    std::string save_path = std::string(file_path) + "_" + std::to_string(nx) + "x" + std::to_string(ny) + "x" + std::to_string(nz) + "_" + std::to_string(number_of_angles) + "_" + mode;
+    if (chords_through == 1) {
+        save_path += "_inverse";
+    }
+    save_path += ".raw";
+    save_to_file(save_path, compressed, num_elements);
 
     // Free the memory
     free(all_chords);
+    free(compressed);
 
     // Unmap the file
     if (munmap(data, file_size) == -1) {
@@ -154,7 +158,7 @@ int main(int argc, char *argv[]) {
  AND ONLY WORKS WITH EQUAL X,Y,Z DIMENSIONS OF VOLUME
 */
 unsigned long* chords_in_any_direction(volume vol, line l) {
-    unsigned long* chords = (unsigned long*) malloc((unsigned int) vol.nx * vol.ny * vol.nz * sizeof(unsigned short));
+    unsigned long* chords = (unsigned long*) malloc((unsigned int) vol.nx * vol.ny * vol.nz * sizeof(unsigned long));
 
     // Check if memory allocation was successful
     if (chords == NULL) {
@@ -173,8 +177,6 @@ unsigned long* chords_in_any_direction(volume vol, line l) {
 
     unsigned long num_paralell_lines = (grid_size * 2) * (grid_size * 2);
 
-    // printf("Got parallel lines\n");
-
     for (int k = 0; k <= num_paralell_lines; k++) {
 
         double t_min, t_max;
@@ -191,9 +193,8 @@ unsigned long* chords_in_any_direction(volume vol, line l) {
                       (unsigned short) (parallel_lines[k].y0 + t_max * parallel_lines[k].direction.b),
                       (unsigned short) (parallel_lines[k].z0 + t_max * parallel_lines[k].direction.c)};
 
-        // DEBUG
-        // TODO: Actual volume sizes here!
-        if (stop.x > 499 || stop.y > 499 || stop.z > 499 || start.x > 499 || start.y > 499 || start.z > 499) {
+        // DEBUG: Can't we top this from happening
+        if (stop.x >= vol.nx || stop.y >= vol.ny || stop.z >= vol.nz || start.x >= vol.nx || start.y >= vol.ny || start.z >= vol.nz) {
             //printf("Tried getting chords along line: %d, %d, %d, %d, %d, %d\n", start.x, start.y, start.z, stop.x, stop.y, stop.z);
             continue;
         }
@@ -278,22 +279,31 @@ void set_chord(unsigned long* chords, chord_pixel last_pixel, unsigned int chord
     }
 }
 
-void merge_chords(unsigned long* chords, unsigned long* to_merge, unsigned int num_elements) {
+void merge_chords(unsigned long* chords, unsigned long* to_merge, unsigned int num_elements, std::string mode) {
     for (int i = 0; i < num_elements; i++) {
-        #pragma omp atomic
-        chords[i] = chords[i] + to_merge[i];
+        # pragma omp critical
+        {
+            if (mode == "avg") {
+            chords[i] = chords[i] + to_merge[i];
+            } else if (mode == "min") {
+                 if (chords[i] > to_merge[i]) chords[i] = to_merge[i];
+            } else if (mode == "max") {
+                if (chords[i] < to_merge[i]) chords[i] = to_merge[i];
+            }
+        }
     }
 }
 
-int save_to_file(unsigned long* chords, unsigned int num_elements) {
-    // save to file
-    FILE *fp = fopen("chords.raw", "wb");
-    if (fp == NULL) {
-        perror("Error opening file");
-        return 1;
+// This function "compresses" the results => we work with longs internally, to be able to accomodate high accumulations in average mode
+// In average mode the mean has to be taken here, in all other modes, we just cast and copy
+unsigned short* compress_results(unsigned long* chords, unsigned short num_elements, unsigned short num_of_angles, std::string mode) {
+    unsigned short* compressed = (unsigned short*) malloc((int) num_elements * sizeof(unsigned short));
+    for (int i = 0; i < num_elements; i++) {
+        if (mode == "avg") {
+            compressed[i] = static_cast<unsigned short>(chords[i] / num_of_angles);
+        } else {
+            compressed[i] = static_cast<unsigned short>(chords[i]);
+        }
     }
-    fwrite(chords, sizeof(unsigned long), num_elements, fp);
-    fclose(fp);
-
-    return 0;
+    return compressed;
 }

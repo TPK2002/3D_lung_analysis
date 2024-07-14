@@ -223,16 +223,3 @@ unsigned short get_line_length(volume vol, point line_start, point line_end, boo
 
     return chord_length;
 }
-
-int save_to_file(std::string save_path, unsigned short* result, unsigned int num_elements) {
-    // save to file
-    FILE *fp = fopen(save_path.c_str(), "wb");
-    if (fp == NULL) {
-        perror("Error opening file");
-        return 1;
-    }
-    fwrite(result, sizeof(unsigned short), num_elements, fp);
-    fclose(fp);
-
-    return 0;
-}
