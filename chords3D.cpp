@@ -21,10 +21,10 @@ struct chord_pixel {
 };
 
 void set_chord(unsigned long* chords, chord_pixel last_pixel, unsigned int chord_length);
-void chords_along_line(volume vol, unsigned long* chords, point line_start, point line_end);
-unsigned long* chords_in_any_direction(volume vol, line l);
-void merge_chords(unsigned long* chords, unsigned long* to_merge, unsigned int num_elements, std::string mode);
-unsigned short* compress_results(unsigned long* chords, unsigned short num_elements, unsigned short num_of_angles, std::string mode);
+void chords_along_line(volume vol, unsigned long* chords, point line_start, point line_end, bool chords_through);
+unsigned long* chords_in_any_direction(volume vol, line l, bool chords_through);
+void merge_chords(unsigned long* chords, unsigned long* to_merge, unsigned long num_elements, std::string mode);
+unsigned short* compress_results(unsigned long* chords, unsigned long num_elements, unsigned short num_of_angles, std::string mode);
 
 int main(int argc, char *argv[]) {
     // Get from CLI. nx, ny, nz, number_of_angles, mode
@@ -64,8 +64,8 @@ int main(int argc, char *argv[]) {
     }
 
     // Calculate the total number of elements
-    unsigned int num_elements = nx * ny * nz;
-    unsigned int file_size = num_elements;
+    unsigned long num_elements = nx * ny * nz;
+    unsigned long file_size = num_elements;
 
     // Open the binary file
     int fd = open(file_path.c_str(), O_RDONLY);
@@ -104,6 +104,13 @@ int main(int argc, char *argv[]) {
 
     unsigned long* all_chords = (unsigned long*) malloc((unsigned int) vol.nx * vol.ny * vol.nz * sizeof(unsigned long));
 
+    // If we use mode min, we need to set all_chords to SHRT_MAX
+    if (mode == "min") {
+        for (int i = 0; i < num_elements; i++) {
+            all_chords[i] = ULONG_MAX;
+        }
+    }
+
     // 1. Calculate fibonacci Hemisphere Points
     point fibonacci_points[number_of_angles];
     unsigned short fibonacci_radius = min(nx, ny, nz) / 2;
@@ -117,7 +124,7 @@ int main(int argc, char *argv[]) {
         // 2. Create a line, by specifying generated point and center of sphere/volume
         line l = {center, fibonacci_points[i]};
 
-        unsigned long* result = chords_in_any_direction(vol, l);
+        unsigned long* result = chords_in_any_direction(vol, l, chords_through);
 
         merge_chords(all_chords, result, num_elements, mode);
         free(result);
@@ -158,7 +165,7 @@ int main(int argc, char *argv[]) {
  CURRENTLY ONLY FILLS ENTIRE VOLUME, IF LINE GOES THROUGH CENTER OF VOLUME
  AND ONLY WORKS WITH EQUAL X,Y,Z DIMENSIONS OF VOLUME
 */
-unsigned long* chords_in_any_direction(volume vol, line l) {
+unsigned long* chords_in_any_direction(volume vol, line l, bool chords_through) {
     unsigned long* chords = (unsigned long*) malloc((unsigned int) vol.nx * vol.ny * vol.nz * sizeof(unsigned long));
 
     // Check if memory allocation was successful
@@ -200,7 +207,7 @@ unsigned long* chords_in_any_direction(volume vol, line l) {
             continue;
         }
 
-        chords_along_line(vol, chords, start, stop);
+        chords_along_line(vol, chords, start, stop, chords_through);
     }
 
     free(parallel_lines);
@@ -210,7 +217,11 @@ unsigned long* chords_in_any_direction(volume vol, line l) {
 
 
 // adjusted Bresenham's line algorithm to generate chords along a line and measure their length
-void chords_along_line(volume vol, unsigned long* chords, point line_start, point line_end) {
+void chords_along_line(volume vol, unsigned long* chords, point line_start, point line_end, bool chords_through) {
+    // FOR DEBUG ONLY
+    // if (line_start.y % 2 == 1)
+    //    return;
+
     int x0 = line_start.x;
     int y0 = line_start.y;
     int z0 = line_start.z;
@@ -225,21 +236,35 @@ void chords_along_line(volume vol, unsigned long* chords, point line_start, poin
     x1 = y1 = z1 = dm/2; /* error offset */
 
     chord_pixel* last_chord_pixel = 0;
-    unsigned int chord_length = 0;
+    point* start_point = 0;
 
     while (1) {  /* loop */
-        unsigned int index = z0 * vol.nx * vol.ny + x0 * vol.ny + y0;
+        unsigned long index = z0 * vol.ny * vol.nx + y0 * vol.nx + x0;
         unsigned short value = vol.data[index];
 
         // TODO: Chords through modus
-        if (value == 0) {
+        if (value == chords_through) {
+                if (start_point == 0) {
+                    start_point = (point*) malloc(sizeof(point));
+                    start_point->x = static_cast<unsigned short>(x0);
+                    start_point->y = static_cast<unsigned short>(x0);
+                    start_point->z = static_cast<unsigned short>(x0);
+                }
                 chord_pixel* new_chord_pixel = (chord_pixel*) malloc(sizeof(chord_pixel));
                 new_chord_pixel->previous_pixel = last_chord_pixel;
                 new_chord_pixel->pixel_index = index;
                 last_chord_pixel = new_chord_pixel;
         } else {
             if (last_chord_pixel != 0) {
-                set_chord(chords, *last_chord_pixel, chord_length);
+                point end_point = {static_cast<unsigned short>(x0),static_cast<unsigned short>(y0),static_cast<unsigned short>(z0)};
+
+                double distance = calc_distance(*start_point, end_point);
+                unsigned short rounded_distance = round(distance);
+
+                free(start_point);
+                start_point = 0;
+
+                set_chord(chords, *last_chord_pixel, distance);
 
                 // Free memory
                 while (1) {
@@ -248,14 +273,13 @@ void chords_along_line(volume vol, unsigned long* chords, point line_start, poin
                         last_chord_pixel = last_chord_pixel->previous_pixel;
                         free(to_free);
                     } else {
-                        break;
                         free(to_free);
+                        last_chord_pixel = 0;
+                        break;
                     }
                 }
-                chord_length = 0;
             }
         }
-        chord_length++;
 
         if (i-- == 0) break;
         x1 -= dx; if (x1 < 0) { x1 += dm; x0 += sx; }
@@ -264,7 +288,10 @@ void chords_along_line(volume vol, unsigned long* chords, point line_start, poin
     }
 
     if (last_chord_pixel != 0) {
-        set_chord(chords, *last_chord_pixel, chord_length);
+        point end_point = {static_cast<unsigned short>(x0),static_cast<unsigned short>(y0),static_cast<unsigned short>(z0)};
+        double distance = calc_distance(*start_point, end_point);
+        unsigned short rounded_distance = round(distance);
+        set_chord(chords, *last_chord_pixel, rounded_distance);
     }
 
 }
@@ -272,9 +299,11 @@ void chords_along_line(volume vol, unsigned long* chords, point line_start, poin
 // use a stack to store chord pixels and set them efficiently
 void set_chord(unsigned long* chords, chord_pixel last_pixel, unsigned int chord_length) {
     // Free up memory on the go, except for the last pixel, that will be freed by the caller
-    while (last_pixel.previous_pixel != 0) {
-        last_pixel = *last_pixel.previous_pixel;
+    while (1) {
         chords[last_pixel.pixel_index] = chord_length;
+        if (last_pixel.previous_pixel != 0)
+            last_pixel = *last_pixel.previous_pixel;
+        else break;
     }
 }
 
@@ -318,12 +347,14 @@ void merge_chords(unsigned long* chords, unsigned long* to_merge, unsigned int n
 
 // This function "compresses" the results => we work with longs internally, to be able to accomodate high accumulations in average mode
 // In average mode the mean has to be taken here, in all other modes, we just cast and copy
-unsigned short* compress_results(unsigned long* chords, unsigned short num_elements, unsigned short num_of_angles, std::string mode) {
-    unsigned short* compressed = (unsigned short*) malloc((unsigned int) num_elements * sizeof(unsigned short));
-    for (int i = 0; i < num_elements; i++) {
-        if (mode == "avg") {
-            compressed[i] = static_cast<unsigned short>(chords[i] / num_of_angles);
-        } else {
+unsigned short* compress_results(unsigned long* chords, unsigned long num_elements, unsigned short num_of_angles, std::string mode) {
+    unsigned short* compressed = (unsigned short*) malloc((unsigned long) num_elements * sizeof(unsigned short));
+    if (mode == "avg") {
+        for (int i = 0; i < num_elements; i++) {
+                compressed[i] = static_cast<unsigned short>(chords[i] / num_of_angles);
+        }
+    } else {
+        for (int i = 0; i < num_elements; i++) {
             compressed[i] = static_cast<unsigned short>(chords[i]);
         }
     }
