@@ -192,6 +192,11 @@ parametric_line* get_parallel_lines(parametric_line l, unsigned short grid_size)
     return parallel_lines;
 }
 
+// Hypot is highly optimized to e.g. avoid overflow
+double calc_distance(point start, point end) {
+    return hypot(hypot(start.x-end.x,start.y-end.y),start.z-end.z);
+}
+
 void fibonacci_hemisphere(point* fibonacci_points, unsigned int number_of_angles, point center, double radius) {
     double golden_ratio = (1.0 + sqrt(5.0)) / 2.0;
 
@@ -232,14 +237,15 @@ void fibonacci_sphere(point* fibonacci_points, unsigned int number_of_angles, po
     }
 }
 
-int save_to_file(std::string save_path, unsigned short* result, unsigned int num_elements) {
+template<typename T>
+int save_to_file(std::string save_path, T* result, unsigned int num_elements) {
     // save to file
     FILE *fp = fopen(save_path.c_str(), "wb");
     if (fp == NULL) {
         perror("Error opening file");
         return 1;
     }
-    fwrite(result, sizeof(unsigned short), num_elements, fp);
+    fwrite(result, sizeof(T), num_elements, fp);
     fclose(fp);
 
     return 0;

@@ -323,7 +323,7 @@ void update_minimum(std::atomic<T>& minimum_value, T const& value) noexcept {
     }
 }
 
-void merge_chords(unsigned long* chords, unsigned long* to_merge, unsigned int num_elements, std::string mode) {
+void merge_chords(unsigned long* chords, unsigned long* to_merge, unsigned long num_elements, std::string mode) {
     if (mode == "min") {
         for (int i = 0; i < num_elements; i++) {
             std::atomic<unsigned long> atomic_chord(chords[i]);
