@@ -21,8 +21,8 @@ struct chord_pixel {
 };
 
 void set_chord(unsigned long* chords, chord_pixel last_pixel, unsigned int chord_length);
-void chords_along_line(volume vol, unsigned long* chords, point line_start, point line_end, bool chords_through);
-unsigned long* chords_in_any_direction(volume vol, line l, bool chords_through);
+void chords_along_line(volume vol, unsigned long* chords, point line_start, point line_end, bool chords_through, std::vector<unsigned short>& chord_lengths);
+unsigned long* chords_in_any_direction(volume vol, line l, bool chords_through, std::vector<unsigned short>& chord_lengths);
 void merge_chords(unsigned long* chords, unsigned long* to_merge, unsigned long num_elements, std::string mode);
 unsigned short* compress_results(unsigned long* chords, unsigned long num_elements, unsigned short num_of_angles, std::string mode);
 
@@ -116,6 +116,8 @@ int main(int argc, char *argv[]) {
     unsigned short fibonacci_radius = min(nx, ny, nz) / 2;
     fibonacci_hemisphere(fibonacci_points, number_of_angles, center, fibonacci_radius);
 
+    std::vector<std::vector<unsigned short>> loose_chord_lengths(number_of_angles);
+
     // For Every Hemisphere Point
     # pragma omp parallel for
     for (int i = 0; i < number_of_angles; i++) {
@@ -124,22 +126,39 @@ int main(int argc, char *argv[]) {
         // 2. Create a line, by specifying generated point and center of sphere/volume
         line l = {center, fibonacci_points[i]};
 
-        unsigned long* result = chords_in_any_direction(vol, l, chords_through);
+        std::vector<unsigned short> chord_lengths;
+        unsigned long* result = chords_in_any_direction(vol, l, chords_through, chord_lengths);
+
+        loose_chord_lengths[i] = chord_lengths;
 
         merge_chords(all_chords, result, num_elements, mode);
         free(result);
 
     }
 
+    printf("Compressing image...");
     unsigned short* compressed = compress_results(all_chords, num_elements, number_of_angles, mode);
+    printf("Done.\n");
 
+    printf("Compressing chord lengths...");
+    std::vector<unsigned short> chord_lengths;
+    for (int i = 0; i < number_of_angles; i++) {
+        chord_lengths.insert(chord_lengths.end(), loose_chord_lengths[i].begin(), loose_chord_lengths[i].end());
+    }
+
+    printf("Saving to file\n");
     // save to file final result
     std::string save_path = std::string(file_path) + "_" + std::to_string(number_of_angles) + "_" + mode;
     if (chords_through == 1) {
         save_path += "_inverse";
     }
-    save_path += ".raw";
-    save_to_file(save_path, compressed, num_elements);
+
+    printf("number of chord lengths: %lu\n", chord_lengths.size());
+
+    std::string image_save_path = save_path + ".raw";
+    std::string lengths_save_path = save_path + ".dat";
+    save_to_file(lengths_save_path, chord_lengths.data(), chord_lengths.size());
+    save_to_file(image_save_path, compressed, num_elements);
 
     // Free the memory
     free(all_chords);
@@ -165,7 +184,7 @@ int main(int argc, char *argv[]) {
  CURRENTLY ONLY FILLS ENTIRE VOLUME, IF LINE GOES THROUGH CENTER OF VOLUME
  AND ONLY WORKS WITH EQUAL X,Y,Z DIMENSIONS OF VOLUME
 */
-unsigned long* chords_in_any_direction(volume vol, line l, bool chords_through) {
+unsigned long* chords_in_any_direction(volume vol, line l, bool chords_through, std::vector<unsigned short>& chord_lengths) {
     unsigned long* chords = (unsigned long*) malloc((unsigned int) vol.nx * vol.ny * vol.nz * sizeof(unsigned long));
 
     // Check if memory allocation was successful
@@ -207,7 +226,7 @@ unsigned long* chords_in_any_direction(volume vol, line l, bool chords_through) 
             continue;
         }
 
-        chords_along_line(vol, chords, start, stop, chords_through);
+        chords_along_line(vol, chords, start, stop, chords_through, chord_lengths);
     }
 
     free(parallel_lines);
@@ -217,7 +236,7 @@ unsigned long* chords_in_any_direction(volume vol, line l, bool chords_through) 
 
 
 // adjusted Bresenham's line algorithm to generate chords along a line and measure their length
-void chords_along_line(volume vol, unsigned long* chords, point line_start, point line_end, bool chords_through) {
+void chords_along_line(volume vol, unsigned long* chords, point line_start, point line_end, bool chords_through, std::vector<unsigned short>& chord_lengths) {
     // FOR DEBUG ONLY
     // if (line_start.y % 2 == 1)
     //    return;
@@ -265,6 +284,9 @@ void chords_along_line(volume vol, unsigned long* chords, point line_start, poin
                 start_point = 0;
 
                 set_chord(chords, *last_chord_pixel, distance);
+
+                // add chord to chord lengths vector
+                chord_lengths.push_back(distance);
 
                 // Free memory
                 while (1) {
