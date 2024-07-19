@@ -202,9 +202,9 @@ unsigned long* chords_in_any_direction(volume vol, line l, bool chords_through, 
     unsigned int grid_size = vol.nx;
     parametric_line* parallel_lines = get_parallel_lines(pl, grid_size);
 
-    // TODO: A lot too much lines are being generated here
-    unsigned long num_paralell_lines = (grid_size * 2) * (grid_size * 2);
-    for (int k = 0; k < num_paralell_lines; k++) {
+    //
+    unsigned long num_paralell_lines = grid_size * grid_size * 3 * 4;
+    for (unsigned int k = 0; k < num_paralell_lines; k++) {
 
         double t_min, t_max;
         get_line_bounds(parallel_lines[k], vol, &t_min, &t_max);
@@ -220,7 +220,7 @@ unsigned long* chords_in_any_direction(volume vol, line l, bool chords_through, 
                       (unsigned short) (parallel_lines[k].y0 + t_max * parallel_lines[k].direction.b),
                       (unsigned short) (parallel_lines[k].z0 + t_max * parallel_lines[k].direction.c)};
 
-        // DEBUG: Can't we top this from happening
+        // DEBUG: Can't we stop this from happening
         if (stop.x >= vol.nx || stop.y >= vol.ny || stop.z >= vol.nz || start.x >= vol.nx || start.y >= vol.ny || start.z >= vol.nz) {
             //printf("Tried getting chords along line: %d, %d, %d, %d, %d, %d\n", start.x, start.y, start.z, stop.x, stop.y, stop.z);
             continue;
@@ -266,8 +266,8 @@ void chords_along_line(volume vol, unsigned long* chords, point line_start, poin
                 if (start_point == 0) {
                     start_point = (point*) malloc(sizeof(point));
                     start_point->x = static_cast<unsigned short>(x0);
-                    start_point->y = static_cast<unsigned short>(x0);
-                    start_point->z = static_cast<unsigned short>(x0);
+                    start_point->y = static_cast<unsigned short>(y0);
+                    start_point->z = static_cast<unsigned short>(z0);
                 }
                 chord_pixel* new_chord_pixel = (chord_pixel*) malloc(sizeof(chord_pixel));
                 new_chord_pixel->previous_pixel = last_chord_pixel;
@@ -312,8 +312,23 @@ void chords_along_line(volume vol, unsigned long* chords, point line_start, poin
     if (last_chord_pixel != 0) {
         point end_point = {static_cast<unsigned short>(x0),static_cast<unsigned short>(y0),static_cast<unsigned short>(z0)};
         double distance = calc_distance(*start_point, end_point);
+		free(start_point);
         unsigned short rounded_distance = round(distance);
         set_chord(chords, *last_chord_pixel, rounded_distance);
+
+		// Free memory
+
+		while (1) {
+            chord_pixel* to_free = last_chord_pixel;
+            if (last_chord_pixel->previous_pixel != 0) {
+                last_chord_pixel = last_chord_pixel->previous_pixel;
+                free(to_free);
+            } else {
+                free(to_free);
+                last_chord_pixel = 0;
+                break;
+            }
+        }
     }
 
 }
