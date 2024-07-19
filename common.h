@@ -157,7 +157,7 @@ void get_line_bounds(parametric_line line, volume vol, double *t_min, double *t_
 }
 
 parametric_line* get_parallel_lines(parametric_line l, unsigned short grid_size) {
-    parametric_line* parallel_lines = (parametric_line*) malloc(sizeof(parametric_line) * grid_size * grid_size * 2 * 2);
+    parametric_line* parallel_lines = (parametric_line*) malloc(sizeof(parametric_line) * grid_size * grid_size * 3 * 4);
     if (parallel_lines == NULL) {
         perror("Failed to allocate memory for parallel lines\n");
         return NULL;
@@ -166,10 +166,13 @@ parametric_line* get_parallel_lines(parametric_line l, unsigned short grid_size)
     vector perp1 = get_perpendicular_vector(l.direction);
     vector perp2 = get_crossprod_perpendicular(l.direction, perp1);
 
-    for (int i = -grid_size; i < grid_size; i++) {
-        for (int j = -grid_size; j < grid_size; j++) {
+    // TODO: explain formula:
+    // https://www.mathe-lexikon.at/geometrie/geometrische-koerper/wuerfel/raumdiagonale.html#google_vignette
+    int a = sqrt(3) * grid_size;
+    for (int i = -a; i < a; i++) {
+        for (int j = -a; j < a; j++) {
             // We intentionally include the center line
-            vector shift = {i * perp1.a + j * perp2.a, i * perp1.b + j * perp2.b, i * perp1.c + j * perp2.c};
+            vector shift = {i/2.0 * perp1.a + j/2.0 * perp2.a, i/2.0 * perp1.b + j/2.0 * perp2.b, i/2.0 * perp1.c + j/2.0 * perp2.c};
             parametric_line new_line;
             new_line.x0 = l.x0 + shift.a;
             new_line.y0 = l.y0 + shift.b;
@@ -177,9 +180,8 @@ parametric_line* get_parallel_lines(parametric_line l, unsigned short grid_size)
             new_line.direction = l.direction;
 
             // TODO: Explain index calculation
-            // printf("index: %d \n", (i + grid_size) * grid_size * 2 + (j + grid_size));
-
-            parallel_lines[(i + grid_size) * grid_size * 2 + (j + grid_size)] = new_line;
+            unsigned long index = (i + a) * (a*2) + (j + a);
+            parallel_lines[index] = new_line;
         }
     }
 
