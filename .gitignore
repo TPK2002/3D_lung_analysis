@@ -1,3 +1,6 @@
 a.out
 *.raw
 *.pch
+*.dat
+chords3D
+pixel_grower

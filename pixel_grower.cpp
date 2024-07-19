@@ -17,7 +17,6 @@
 
 unsigned short get_pixel_distance(point current_point, volume vol, unsigned short number_of_angles, std::string mode, bool chords_through);
 unsigned short get_line_length(volume vol, point line_start, point line_end, bool chords_through);
-int save_to_file(std::string save_path, unsigned short* result, unsigned int num_elements);
 
 int main(int argc, char *argv[]){
 
